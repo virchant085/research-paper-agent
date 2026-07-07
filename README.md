@@ -2,18 +2,26 @@
 
 [![CI](https://github.com/virchant085/research-paper-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/virchant085/research-paper-agent/actions/workflows/ci.yml)
 
-> Personal Research Assistant Agent for **TEM / Robotics** papers.
+> An AI research assistant that reads your **TEM / Robotics** papers and answers
+> grounded, source-cited questions about them — with any LLM you choose.
 
-Upload a paper PDF or paste an arXiv link, and the agent parses it, auto-extracts a
-structured **problem / method / dataset / contribution / limitation** card — typed by the
-five-type paper taxonomy, with a terminology ledger and **source-verified evidence
-quotes** — indexes it for RAG retrieval, and answers questions by calling tools: search,
-summarize, compare, rank by relevance, build a literature table, and export to
-Markdown / CSV.
+Drop in a paper (PDF upload or arXiv link) and the agent parses it, then auto-extracts a
+structured **problem / method / dataset / contribution / limitation** card — classified by a
+five-type paper taxonomy, carrying a terminology ledger and **source-verified evidence
+quotes** (every quote is machine-checked against the paper; unverifiable ones are dropped).
+Papers are chunked and embedded for RAG, and you query the library through a tool-using agent
+that searches, summarizes, compares, ranks by relevance, builds literature tables, and
+exports to Markdown / CSV — always citing the paper and section it drew from.
 
-**Model-agnostic:** works with any mainstream LLM (OpenAI, Anthropic Claude, Google
-Gemini, Mistral, Groq, DeepSeek, Cohere, local Ollama, …) — switch by changing one
-`LLM_MODEL` string.
+Three things set it apart:
+
+- **Model-agnostic** — works with any mainstream LLM (OpenAI, Anthropic Claude, Google
+  Gemini, Mistral, Groq, DeepSeek, Cohere, local Ollama, …). Switch by changing one
+  `LLM_MODEL` string; no per-provider code.
+- **Grounded by design** — both extraction and answers must cite the source or say it isn't
+  stated, never guess. Evidence quotes are verified against the original text.
+- **Production-shaped** — typed FastAPI backend, 98 offline tests, and CI on Python 3.11 / 3.12;
+  one-command Docker for the API + UI.
 
 ---
 
@@ -22,7 +30,7 @@ Gemini, Mistral, Groq, DeepSeek, Cohere, local Ollama, …) — switch by changi
 ```
 Streamlit UI  ──HTTP──▶  FastAPI  ──▶  Agent (function-calling loop)
                                           ├─ Ingestion pipeline (parse → chunk → extract → index)
-                                          └─ Tools: search / summarize / compare / lit-table / export
+                                          └─ Tools: search / summarize / compare / score / lit-table / export
                                                        │
                               Chroma (vectors) ◀───────┼───────▶ SQLite (PaperCards)
                                                        │
