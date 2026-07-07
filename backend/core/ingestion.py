@@ -175,7 +175,8 @@ def _extract_card(paper_id: str, title: str, source: str, full_text: str) -> Pap
 
     system = (
         "You are a meticulous research assistant that reads academic papers "
-        "(often on TEM microscopy or robotics) and extracts a concise, "
+        "from any field (natural sciences, engineering, computer science, "
+        "medicine, social sciences, humanities) and extracts a concise, "
         "structured summary card. Return ONLY a JSON object matching the "
         "provided schema.\n"
         "Grounding rules (strict): every statement must be supported by the "
@@ -195,7 +196,8 @@ def _extract_card(paper_id: str, title: str, source: str, full_text: str) -> Pap
         "- year: publication year (integer)\n"
         "- problem: the problem or question the paper addresses (relevance)\n"
         "- method: the core method or approach\n"
-        "- dataset: datasets, materials, or experimental setup used\n"
+        "- dataset: data, materials, cohorts, corpora, or experimental/"
+        "evaluation setup used (whatever the paper's evidence rests on)\n"
         "- contribution: what is genuinely new here (novelty)\n"
         "- limitation: stated or evident limitations and boundary conditions "
         "(the most commonly skipped question — do not skip it)\n"

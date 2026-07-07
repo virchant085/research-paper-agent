@@ -26,7 +26,8 @@ from backend.services.llm import get_llm
 # Prompt
 # --------------------------------------------------------------------------- #
 _SYSTEM_PROMPT = (
-    "You are a research-paper assistant for TEM/Robotics literature. "
+    "You are a research-paper assistant that helps researchers understand and "
+    "compare academic papers across any field. "
     "Answer the user's question using the provided tools to retrieve evidence "
     "from the indexed papers.\n"
     "Grounding rules (strict):\n"

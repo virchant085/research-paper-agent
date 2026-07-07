@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/virchant085/research-paper-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/virchant085/research-paper-agent/actions/workflows/ci.yml)
 
-> An AI research assistant that reads your **TEM / Robotics** papers and answers
-> grounded, source-cited questions about them — with any LLM you choose.
+> A general-purpose AI research assistant that reads your papers — **in any field** —
+> and answers grounded, source-cited questions about them, with any LLM you choose.
 
 Drop in a paper (PDF upload or arXiv link) and the agent parses it, then auto-extracts a
 structured **problem / method / dataset / contribution / limitation** card — classified by a

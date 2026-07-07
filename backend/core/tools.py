@@ -582,8 +582,9 @@ TOOL_SCHEMAS: list[dict] = [
                         "type": "string",
                         "description": (
                             "The research question or focus to score papers "
-                            "against, e.g. 'in-situ TEM observation of oxide "
-                            "growth'."
+                            "against — any field, e.g. 'sample-efficient "
+                            "reinforcement learning' or 'CRISPR delivery "
+                            "methods'."
                         ),
                     },
                     "paper_ids": {
