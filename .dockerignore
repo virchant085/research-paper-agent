@@ -1,0 +1,33 @@
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Local data & generated artifacts (mounted as a volume at runtime)
+data/
+
+# Secrets (provided via env_file at runtime, never baked into the image)
+.env
+*.local
+
+# Version control & CI
+.git/
+.github/
+.gitignore
+
+# Tests & dev-only tooling
+tests/
+.claude/
+scratchpad/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

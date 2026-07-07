@@ -1,0 +1,17 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Critical correctness checks only (undefined names, syntax, bad f-strings, etc.),
+# so CI catches real breakage without style churn.
+select = ["E9", "F63", "F7", "F82"]

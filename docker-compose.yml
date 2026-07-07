@@ -1,0 +1,22 @@
+# Runs the whole app with one command:  docker compose up --build
+# Both services share one image (build: .); each overrides `command`.
+services:
+  api:
+    build: .
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+
+  ui:
+    build: .
+    command: streamlit run frontend/app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      API_BASE: http://api:8000
+    env_file: .env
+    depends_on:
+      - api

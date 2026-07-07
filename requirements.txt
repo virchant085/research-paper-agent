@@ -13,9 +13,10 @@ requests>=2.31
 # --- Vector store ---
 chromadb>=0.5
 
-# --- LLM providers ---
-google-generativeai>=0.7
-openai>=1.30
+# --- LLM: one universal gateway to all mainstream providers ---
+# LiteLLM speaks OpenAI, Anthropic, Gemini, Mistral, Groq, DeepSeek, Cohere,
+# Azure, Ollama, and 100+ more behind a single OpenAI-style interface.
+litellm>=1.44
 
 # --- Frontend ---
 streamlit>=1.34

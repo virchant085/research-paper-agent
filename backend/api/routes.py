@@ -130,5 +130,10 @@ async def export(req: ExportRequest) -> ExportResponse:
 # --------------------------------------------------------------------------- #
 @router.get("/health")
 async def health() -> dict:
-    """Liveness probe reporting the configured LLM provider."""
-    return {"status": "ok", "provider": settings.llm_provider}
+    """Liveness probe reporting the configured model and provider."""
+    return {
+        "status": "ok",
+        "provider": settings.provider,
+        "llm_model": settings.llm_model,
+        "embed_model": settings.embed_model,
+    }
