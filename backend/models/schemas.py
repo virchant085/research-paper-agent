@@ -13,8 +13,25 @@ from pydantic import BaseModel, Field
 # --------------------------------------------------------------------------- #
 # Core domain models
 # --------------------------------------------------------------------------- #
+# The canonical five-type paper taxonomy (from the nature-skills shared core:
+# research / methods / hypothesis / algorithmic / review).
+PAPER_TYPES: tuple = ("research", "methods", "hypothesis", "algorithmic", "review")
+
+
 class PaperCard(BaseModel):
-    """The five-element structured summary extracted once at ingestion time."""
+    """The structured summary extracted once at ingestion time.
+
+    Beyond the five analysis elements (problem/method/dataset/contribution/
+    limitation), the card carries:
+
+    - ``paper_type`` — one of the five canonical taxonomy types, so downstream
+      comparison and review know the paper's argument structure.
+    - ``key_terms`` — a small terminology ledger ("term — definition" entries)
+      so every later output uses one name for one thing.
+    - ``evidence`` — source-grounding anchors: short verbatim quotes from the
+      paper backing each of the five elements. Quotes are verified against the
+      source text at extraction time; unverifiable quotes are dropped.
+    """
 
     paper_id: str
     title: str
@@ -27,6 +44,10 @@ class PaperCard(BaseModel):
     dataset: str = ""
     contribution: str = ""
     limitation: str = ""
+
+    paper_type: str = ""  # one of PAPER_TYPES, or "" if undetermined
+    key_terms: List[str] = Field(default_factory=list)
+    evidence: dict = Field(default_factory=dict)  # element -> verbatim quote
 
 
 class Chunk(BaseModel):

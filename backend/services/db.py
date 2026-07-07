@@ -16,8 +16,9 @@ from contextlib import closing
 from backend.config import settings
 from backend.models.schemas import PaperCard
 
-# Columns of the ``papers`` table, in declaration order. ``authors`` is stored
-# as a JSON-encoded string; every other field maps directly to a PaperCard attr.
+# Columns of the ``papers`` table, in declaration order. ``authors``,
+# ``key_terms`` and ``evidence`` are stored as JSON-encoded strings; every other
+# field maps directly to a PaperCard attr.
 _COLUMNS: tuple[str, ...] = (
     "paper_id",
     "title",
@@ -29,6 +30,17 @@ _COLUMNS: tuple[str, ...] = (
     "dataset",
     "contribution",
     "limitation",
+    "paper_type",
+    "key_terms",
+    "evidence",
+)
+
+# Columns added after the first release, with their DDL — applied via ALTER
+# TABLE when opening an older database file.
+_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("paper_type", "TEXT NOT NULL DEFAULT ''"),
+    ("key_terms", "TEXT NOT NULL DEFAULT '[]'"),
+    ("evidence", "TEXT NOT NULL DEFAULT '{}'"),
 )
 
 
@@ -62,23 +74,41 @@ def init_db() -> None:
                 method       TEXT NOT NULL DEFAULT '',
                 dataset      TEXT NOT NULL DEFAULT '',
                 contribution TEXT NOT NULL DEFAULT '',
-                limitation   TEXT NOT NULL DEFAULT ''
+                limitation   TEXT NOT NULL DEFAULT '',
+                paper_type   TEXT NOT NULL DEFAULT '',
+                key_terms    TEXT NOT NULL DEFAULT '[]',
+                evidence     TEXT NOT NULL DEFAULT '{}'
             )
             """
         )
+        # Migrate databases created before the nature-skills-inspired fields.
+        existing = {
+            row[1] for row in conn.execute("PRAGMA table_info(papers)").fetchall()
+        }
+        for column, ddl in _MIGRATIONS:
+            if column not in existing:
+                conn.execute(f"ALTER TABLE papers ADD COLUMN {column} {ddl}")
         conn.commit()
 
 
-def _row_to_card(row: sqlite3.Row) -> PaperCard:
-    """Convert a DB row into a :class:`PaperCard`, decoding the JSON authors."""
+def _loads_json(raw: object, default: object) -> object:
+    """Decode a JSON column value, falling back to ``default`` on any problem."""
 
-    raw_authors = row["authors"]
+    if not raw:
+        return default
     try:
-        authors = json.loads(raw_authors) if raw_authors else []
+        value = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        authors = []
-    if not isinstance(authors, list):
-        authors = []
+        return default
+    return value if isinstance(value, type(default)) else default
+
+
+def _row_to_card(row: sqlite3.Row) -> PaperCard:
+    """Convert a DB row into a :class:`PaperCard`, decoding the JSON columns."""
+
+    authors = _loads_json(row["authors"], [])
+    key_terms = _loads_json(row["key_terms"], [])
+    evidence = _loads_json(row["evidence"], {})
 
     return PaperCard(
         paper_id=row["paper_id"],
@@ -91,6 +121,9 @@ def _row_to_card(row: sqlite3.Row) -> PaperCard:
         dataset=row["dataset"] or "",
         contribution=row["contribution"] or "",
         limitation=row["limitation"] or "",
+        paper_type=row["paper_type"] or "",
+        key_terms=[str(t) for t in key_terms],
+        evidence={str(k): str(v) for k, v in evidence.items()},
     )
 
 
@@ -112,6 +145,9 @@ def save_card(card: PaperCard) -> None:
         card.dataset,
         card.contribution,
         card.limitation,
+        card.paper_type,
+        json.dumps(list(card.key_terms), ensure_ascii=False),
+        json.dumps(dict(card.evidence), ensure_ascii=False),
     )
     placeholders = ", ".join(["?"] * len(_COLUMNS))
     columns = ", ".join(_COLUMNS)

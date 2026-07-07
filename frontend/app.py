@@ -192,11 +192,24 @@ def _render_card_fields(card: dict) -> None:
     st.markdown(f"**Authors:** {authors_str}")
     st.markdown(f"**Year:** {year if year is not None else '-'}")
     st.markdown(f"**Source:** {card.get('source', '') or '-'}")
+    st.markdown(f"**Type:** {card.get('paper_type', '') or '-'}")
     st.markdown(f"**Problem:** {card.get('problem', '') or '-'}")
     st.markdown(f"**Method:** {card.get('method', '') or '-'}")
     st.markdown(f"**Dataset:** {card.get('dataset', '') or '-'}")
     st.markdown(f"**Contribution:** {card.get('contribution', '') or '-'}")
     st.markdown(f"**Limitation:** {card.get('limitation', '') or '-'}")
+
+    key_terms = card.get("key_terms") or []
+    if key_terms:
+        st.markdown("**Key terms:**")
+        for term in key_terms:
+            st.markdown(f"- {term}")
+
+    evidence = card.get("evidence") or {}
+    if evidence:
+        with st.popover("Source evidence (verified quotes)"):
+            for field, quote in evidence.items():
+                st.markdown(f"**{field}:** “{quote}”")
 
 
 # --------------------------------------------------------------------------- #

@@ -11,10 +11,11 @@ the API layer can surface it cleanly.
 """
 from __future__ import annotations
 
+import re
 from uuid import uuid4
 
 from backend.config import settings
-from backend.models.schemas import IngestResponse, PaperCard
+from backend.models.schemas import PAPER_TYPES, IngestResponse, PaperCard
 from backend.services import db, parser
 from backend.services.llm import get_llm
 from backend.services.vectorstore import get_store
@@ -23,6 +24,9 @@ from backend.services.vectorstore import get_store
 # information-dense parts of a paper (title, abstract, intro, method) live near
 # the front, so a leading slice is a good, cheap proxy for the whole document.
 _MAX_CARD_CHARS = 24000
+
+# The five analysis elements that evidence quotes may anchor.
+_EVIDENCE_KEYS = ("problem", "method", "dataset", "contribution", "limitation")
 
 
 def ingest_pdf(path: str, source_name: str) -> IngestResponse:
@@ -148,6 +152,12 @@ def _extract_card(paper_id: str, title: str, source: str, full_text: str) -> Pap
             "dataset": {"type": "string"},
             "contribution": {"type": "string"},
             "limitation": {"type": "string"},
+            "paper_type": {"type": "string", "enum": list(PAPER_TYPES)},
+            "key_terms": {"type": "array", "items": {"type": "string"}},
+            "evidence": {
+                "type": "object",
+                "properties": {k: {"type": "string"} for k in _EVIDENCE_KEYS},
+            },
         },
         "required": [
             "title",
@@ -157,6 +167,7 @@ def _extract_card(paper_id: str, title: str, source: str, full_text: str) -> Pap
             "dataset",
             "contribution",
             "limitation",
+            "paper_type",
         ],
     }
 
@@ -166,21 +177,41 @@ def _extract_card(paper_id: str, title: str, source: str, full_text: str) -> Pap
         "You are a meticulous research assistant that reads academic papers "
         "(often on TEM microscopy or robotics) and extracts a concise, "
         "structured summary card. Return ONLY a JSON object matching the "
-        "provided schema. Be faithful to the text: if a field cannot be "
-        "determined, use an empty string (or an empty list for authors). "
-        "Keep each field to one or two sentences."
+        "provided schema.\n"
+        "Grounding rules (strict): every statement must be supported by the "
+        "paper text. If a field cannot be determined from the text, use an "
+        "empty string (or an empty list) — NEVER guess or fabricate. "
+        "Evidence quotes must be short VERBATIM excerpts copied exactly from "
+        "the paper text; they will be machine-checked against the source and "
+        "discarded if they do not match."
     )
     user = (
         f"Known title (may be imperfect): {title}\n\n"
-        "Extract the following fields from the paper text below:\n"
+        "Read the paper the way a researcher does — answering, in order: "
+        "is this relevant, what is new, do I believe it, can I use it, and "
+        "where are the boundaries. Then extract:\n"
         "- title: the paper's title\n"
         "- authors: list of author names\n"
         "- year: publication year (integer)\n"
-        "- problem: the problem or question the paper addresses\n"
+        "- problem: the problem or question the paper addresses (relevance)\n"
         "- method: the core method or approach\n"
         "- dataset: datasets, materials, or experimental setup used\n"
-        "- contribution: the main contribution(s)\n"
-        "- limitation: stated or evident limitations\n\n"
+        "- contribution: what is genuinely new here (novelty)\n"
+        "- limitation: stated or evident limitations and boundary conditions "
+        "(the most commonly skipped question — do not skip it)\n"
+        "- paper_type: exactly one of research (reports a finding), methods "
+        "(proposes a protocol/measurement), hypothesis (tests a causal "
+        "explanation), algorithmic (proposes a procedure/model/system), or "
+        "review (synthesizes a field)\n"
+        "- key_terms: a small terminology ledger — up to 8 recurring domain "
+        "terms as 'canonical term — one-line definition' entries, using the "
+        "exact names the paper itself uses (one name for one thing; never "
+        "coin new names)\n"
+        "- evidence: for each of problem/method/dataset/contribution/"
+        "limitation, a short verbatim quote (<=25 words) from the paper text "
+        "that supports your summary of that field; omit an element if no "
+        "supporting sentence exists\n\n"
+        "Keep each summary field to one or two sentences.\n\n"
         "=== PAPER TEXT (may be truncated) ===\n"
         f"{excerpt}"
     )
@@ -207,6 +238,18 @@ def _extract_card(paper_id: str, title: str, source: str, full_text: str) -> Pap
 
     year = _coerce_year(data.get("year"))
 
+    paper_type = str(data.get("paper_type") or "").strip().lower()
+    if paper_type not in PAPER_TYPES:
+        paper_type = ""
+
+    key_terms_raw = data.get("key_terms") or []
+    if isinstance(key_terms_raw, list):
+        key_terms = [str(t).strip() for t in key_terms_raw if str(t).strip()][:8]
+    else:
+        key_terms = []
+
+    evidence = _verify_evidence(data.get("evidence"), full_text)
+
     return PaperCard(
         paper_id=paper_id,
         title=card_title,
@@ -218,7 +261,36 @@ def _extract_card(paper_id: str, title: str, source: str, full_text: str) -> Pap
         dataset=str(data.get("dataset") or "").strip(),
         contribution=str(data.get("contribution") or "").strip(),
         limitation=str(data.get("limitation") or "").strip(),
+        paper_type=paper_type,
+        key_terms=key_terms,
+        evidence=evidence,
     )
+
+
+def _normalize(text: str) -> str:
+    """Collapse whitespace and lowercase, for tolerant quote matching."""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _verify_evidence(raw: object, full_text: str) -> dict:
+    """Keep only evidence quotes that actually appear in the source text.
+
+    This is the trust step: a quote the model *claims* is verbatim but that
+    cannot be located in the paper (after whitespace/case normalization) is
+    dropped rather than stored. Grounding that cannot be verified is not
+    grounding.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    haystack = _normalize(full_text)
+    verified: dict[str, str] = {}
+    for key in _EVIDENCE_KEYS:
+        quote = str(raw.get(key) or "").strip()
+        if not quote:
+            continue
+        if _normalize(quote) in haystack:
+            verified[key] = quote
+    return verified
 
 
 def _coerce_year(value: object) -> int | None:

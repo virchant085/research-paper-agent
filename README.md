@@ -5,9 +5,11 @@
 > Personal Research Assistant Agent for **TEM / Robotics** papers.
 
 Upload a paper PDF or paste an arXiv link, and the agent parses it, auto-extracts a
-structured **problem / method / dataset / contribution / limitation** card, indexes it
-for RAG retrieval, and answers questions by calling tools — search, summarize, compare,
-build a literature table, and export to Markdown / CSV.
+structured **problem / method / dataset / contribution / limitation** card — typed by the
+five-type paper taxonomy, with a terminology ledger and **source-verified evidence
+quotes** — indexes it for RAG retrieval, and answers questions by calling tools: search,
+summarize, compare, rank by relevance, build a literature table, and export to
+Markdown / CSV.
 
 **Model-agnostic:** works with any mainstream LLM (OpenAI, Anthropic Claude, Google
 Gemini, Mistral, Groq, DeepSeek, Cohere, local Ollama, …) — switch by changing one
@@ -72,8 +74,9 @@ and provide that provider's key under its standard variable name:
 |------|--------------|
 | `search_chunks` | Vector search over paper chunks, filterable by paper / section |
 | `summarize_section` | Summarize one section of a paper, grounded in its retrieved text |
-| `compare_papers` | Markdown comparison table across the five card dimensions |
+| `compare_papers` | Markdown comparison table across the card dimensions (incl. `paper_type`) |
 | `generate_lit_table` | Literature-review table over selected papers |
+| `score_papers` | Rank papers against a research focus on six weighted dimensions |
 | `export` | Write Markdown or CSV to disk, return the path |
 
 ## REST API
@@ -119,7 +122,7 @@ docker compose up --build
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                        # 87 tests, fully offline (LLM + network are mocked)
+pytest                        # 98 tests, fully offline (LLM + network are mocked)
 ```
 
 The suite runs with no API keys: the LLM is replaced by a deterministic fake, while Chroma
@@ -135,7 +138,7 @@ backend/
   api/routes.py      REST endpoints
   core/
     agent.py         bounded function-calling loop
-    tools.py         the 5 tools + OpenAI-format schemas + registry
+    tools.py         the 6 tools + OpenAI-format schemas + registry
     ingestion.py     parse → chunk → extract card → index
   services/
     llm.py           universal LLM client (LiteLLM: chat / structured / embed)
@@ -144,9 +147,36 @@ backend/
     db.py            SQLite PaperCard store
   models/schemas.py  Pydantic contracts (PaperCard, Chunk, request/response)
 frontend/app.py      Streamlit UI (Papers / Chat / Library tabs)
-tests/               offline pytest suite (87 tests)
+tests/               offline pytest suite (98 tests)
 Dockerfile           docker-compose.yml   .github/workflows/ci.yml
 ```
+
+## Design influences: nature-skills
+
+The analysis methodology is adapted from
+[nature-skills](https://github.com/Yuan1z0825/nature-skills) (Apache-2.0), a research-skill
+library for AI agents. Four of its ideas are built into this codebase:
+
+1. **Source grounding** (from `nature-reader`'s grounding rules) — extraction asks the model
+   for short *verbatim* evidence quotes backing each card field, then **machine-verifies**
+   every quote against the source text and drops any that don't match: grounding that cannot
+   be verified is not grounding. The agent's system prompt enforces the same discipline at
+   query time — cite provenance inline, and say plainly when the source doesn't state
+   something instead of guessing.
+2. **Five-type paper taxonomy** (from the shared core) — every paper is classified as
+   `research / methods / hypothesis / algorithmic / review`, which tells downstream
+   comparison and triage what the paper's argument structure is.
+3. **Terminology ledger** — extraction records the paper's own canonical terms
+   ("one name for one thing"), and the agent is instructed never to coin synonyms for the
+   authors' concepts.
+4. **Six-dimension scoring** (from `nature-literature-pipeline`) — `score_papers` ranks the
+   library against a research focus with weighted dimensions (topic 35, method 20, venue 15,
+   network 10, applied 10, archival 10), enforcing the rubric *in code*: per-dimension caps,
+   recalculated totals, and a topic gate that rejects off-topic papers outright.
+
+The extraction prompt is also organized around the reader's question sequence (relevance →
+novelty → trust → reuse → boundaries), with an explicit instruction not to skip limitations —
+the most commonly skipped question.
 
 ## Notes
 

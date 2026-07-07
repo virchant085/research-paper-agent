@@ -1,4 +1,4 @@
-"""The five agent tools, their OpenAI-format schemas, and a name->function registry.
+"""The agent tools, their OpenAI-format schemas, and a name->function registry.
 
 These functions are the concrete actions the agent can take. Each returns a
 plain string (which is fed back to the LLM as a tool result) except ``export``,
@@ -6,9 +6,9 @@ which writes a file and returns the file path.
 
 The public surface used by the rest of the codebase is:
 
-* the five tool functions (``search_chunks``, ``summarize_section``,
-  ``compare_papers``, ``generate_lit_table``, ``export``),
-* ``TOOL_SCHEMAS`` -- OpenAI function-calling schemas for all five tools,
+* the six tool functions (``search_chunks``, ``summarize_section``,
+  ``compare_papers``, ``generate_lit_table``, ``score_papers``, ``export``),
+* ``TOOL_SCHEMAS`` -- OpenAI function-calling schemas for all tools,
 * ``TOOL_REGISTRY`` -- maps a tool name to its callable.
 """
 from __future__ import annotations
@@ -159,9 +159,9 @@ def compare_papers(paper_ids: list[str], dimensions: list[str] | None = None) ->
 # Tool 4: literature table
 # --------------------------------------------------------------------------- #
 _LIT_TABLE_HEADER = (
-    "| Title | Year | Problem | Method | Dataset | Contribution | Limitation |"
+    "| Title | Year | Type | Problem | Method | Dataset | Contribution | Limitation |"
 )
-_LIT_TABLE_DIVIDER = "| --- | --- | --- | --- | --- | --- | --- |"
+_LIT_TABLE_DIVIDER = "| --- | --- | --- | --- | --- | --- | --- | --- |"
 
 
 def generate_lit_table(paper_ids: list[str] | None = None) -> str:
@@ -184,6 +184,7 @@ def generate_lit_table(paper_ids: list[str] | None = None) -> str:
         row = [
             _escape_cell(card.title),
             _escape_cell(year),
+            _escape_cell(card.paper_type) or "-",
             _escape_cell(card.problem),
             _escape_cell(card.method),
             _escape_cell(card.dataset),
@@ -195,7 +196,161 @@ def generate_lit_table(paper_ids: list[str] | None = None) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Tool 5: export
+# Tool 5: six-dimension relevance scoring
+# --------------------------------------------------------------------------- #
+# Weights follow the nature-literature-pipeline rubric: topic match dominates,
+# and it is also a gate — a paper that misses the topic is rejected outright no
+# matter how prestigious or well-made it is.
+_SCORE_DIMENSIONS: tuple[tuple[str, int], ...] = (
+    ("topic", 35),      # alignment with the stated research focus
+    ("method", 20),     # methodological quality and applicability
+    ("venue", 15),      # source/venue quality and credibility
+    ("network", 10),    # relevance to tracked authors/institutions
+    ("applied", 10),    # practical utility: protocols, datasets, benchmarks
+    ("archival", 10),   # long-term reference value
+)
+_TOPIC_GATE = 10  # papers scoring below this on topic are auto-rejected
+
+
+def score_papers(research_focus: str, paper_ids: list[str] | None = None) -> str:
+    """Score stored papers against a research focus on six weighted dimensions.
+
+    Asks the LLM to score each paper card, then enforces the rubric in code:
+    every dimension is capped at its weight, the total is recalculated (never
+    trusted), and papers under the topic gate are rejected regardless of their
+    other scores. Returns a ranked markdown table.
+    """
+    if not research_focus or not research_focus.strip():
+        return "No research focus provided to score against."
+
+    if paper_ids:
+        cards = [c for c in (db.get_card(pid) for pid in paper_ids) if c is not None]
+    else:
+        cards = db.list_cards()
+    if not cards:
+        return "No papers in the library yet."
+
+    dims = ", ".join(f"{name} (max {cap})" for name, cap in _SCORE_DIMENSIONS)
+    card_lines = []
+    for c in cards:
+        card_lines.append(
+            f"- paper_id={c.paper_id} | title={c.title} | type={c.paper_type or '?'} | "
+            f"problem={c.problem} | method={c.method} | dataset={c.dataset} | "
+            f"contribution={c.contribution} | limitation={c.limitation}"
+        )
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "scores": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "paper_id": {"type": "string"},
+                        **{
+                            name: {"type": "integer"}
+                            for name, _ in _SCORE_DIMENSIONS
+                        },
+                        "rationale": {"type": "string"},
+                    },
+                    "required": ["paper_id", "topic"],
+                },
+            }
+        },
+        "required": ["scores"],
+    }
+    system = (
+        "You are a rigorous literature triage assistant. Score each paper "
+        "against the user's research focus on six dimensions. Be conservative: "
+        "a famous paper that is off-topic must score low on topic. Base scores "
+        "only on the provided card fields; do not reward prestige over fit."
+    )
+    user = (
+        f"Research focus: {research_focus}\n\n"
+        f"Dimensions and caps: {dims}\n\n"
+        "Papers:\n" + "\n".join(card_lines) + "\n\n"
+        "For each paper return its paper_id, an integer score per dimension "
+        "(never exceeding that dimension's cap), and a one-sentence rationale."
+    )
+
+    try:
+        data = get_llm().structured(system, user, schema)
+    except Exception as exc:  # noqa: BLE001 - report, don't crash the agent loop
+        return f"Scoring failed: {exc}"
+
+    raw_scores = data.get("scores") if isinstance(data, dict) else None
+    if not isinstance(raw_scores, list):
+        return "Scoring failed: model returned no scores."
+
+    by_id = {c.paper_id: c for c in cards}
+    ranked: list[tuple[int, dict, PaperCard]] = []
+    rejected: list[tuple[PaperCard, int]] = []
+    for entry in raw_scores:
+        if not isinstance(entry, dict):
+            continue
+        card = by_id.get(str(entry.get("paper_id", "")))
+        if card is None:
+            continue
+        # Enforce the rubric in code: cap each dimension, recalculate the total.
+        capped = {
+            name: max(0, min(_as_int(entry.get(name)), cap))
+            for name, cap in _SCORE_DIMENSIONS
+        }
+        total = sum(capped.values())
+        if capped["topic"] < _TOPIC_GATE:
+            rejected.append((card, capped["topic"]))
+            continue
+        entry = {**entry, **capped, "total": total}
+        ranked.append((total, entry, card))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+
+    lines = [
+        f"Ranking against research focus: {research_focus}",
+        "",
+        "| Rank | Title | Total | Topic | Method | Venue | Network | Applied | Archival | Rationale |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for rank, (total, entry, card) in enumerate(ranked, start=1):
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(rank),
+                    _escape_cell(_card_label(card)),
+                    str(total),
+                    *[str(entry[name]) for name, _ in _SCORE_DIMENSIONS],
+                    _escape_cell(str(entry.get("rationale", ""))),
+                ]
+            )
+            + " |"
+        )
+    if rejected:
+        lines.append("")
+        lines.append(
+            "_Rejected by topic gate (topic < "
+            f"{_TOPIC_GATE}): "
+            + ", ".join(f"{_card_label(c)} (topic={t})" for c, t in rejected)
+            + "._"
+        )
+    if not ranked and not rejected:
+        return "Scoring failed: no scored papers matched the library."
+    return "\n".join(lines)
+
+
+def _as_int(value: object) -> int:
+    """Best-effort integer coercion for model-supplied scores (bad input -> 0)."""
+    try:
+        if isinstance(value, bool):
+            return 0
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+# --------------------------------------------------------------------------- #
+# Tool 6: export
 # --------------------------------------------------------------------------- #
 def _next_export_index(export_dir: Path, prefix: str, ext: str) -> int:
     """Pick a stable index by counting existing matching export files.
@@ -248,11 +403,13 @@ def export(
             "authors",
             "year",
             "source",
+            "paper_type",
             "problem",
             "method",
             "dataset",
             "contribution",
             "limitation",
+            "key_terms",
         ]
         with path.open("w", encoding="utf-8", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
@@ -265,11 +422,13 @@ def export(
                         "authors": "; ".join(card.authors),
                         "year": "" if card.year is None else card.year,
                         "source": card.source,
+                        "paper_type": card.paper_type,
                         "problem": card.problem,
                         "method": card.method,
                         "dataset": card.dataset,
                         "contribution": card.contribution,
                         "limitation": card.limitation,
+                        "key_terms": "; ".join(card.key_terms),
                     }
                 )
         return str(path)
@@ -407,6 +566,42 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "score_papers",
+            "description": (
+                "Score and rank stored papers against a research focus on six "
+                "weighted dimensions (topic match 35, methodological value 20, "
+                "venue quality 15, network relevance 10, applied value 10, "
+                "archival value 10). Papers that miss the topic are rejected "
+                "outright. Use when the user asks which papers are most "
+                "relevant/important for a topic, or to triage the library."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "research_focus": {
+                        "type": "string",
+                        "description": (
+                            "The research question or focus to score papers "
+                            "against, e.g. 'in-situ TEM observation of oxide "
+                            "growth'."
+                        ),
+                    },
+                    "paper_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional: restrict scoring to these paper ids. "
+                            "Omit for the whole library."
+                        ),
+                    },
+                },
+                "required": ["research_focus"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "export",
             "description": (
                 "Export content or the literature library to a file and return "
@@ -451,5 +646,6 @@ TOOL_REGISTRY: dict[str, Callable] = {
     "summarize_section": summarize_section,
     "compare_papers": compare_papers,
     "generate_lit_table": generate_lit_table,
+    "score_papers": score_papers,
     "export": export,
 }

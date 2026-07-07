@@ -49,10 +49,13 @@ def test_generate_lit_table_contains_titles_and_header():
     db.save_card(_card("p2", title="Second Paper"))
 
     table = generate_lit_table()
-    # Header row present.
-    assert "| Title | Year | Problem | Method | Dataset | Contribution | Limitation |" in table
+    # Header row present (Type column comes from the paper-type taxonomy).
+    assert (
+        "| Title | Year | Type | Problem | Method | Dataset | Contribution | Limitation |"
+        in table
+    )
     # Divider row present.
-    assert "| --- | --- | --- | --- | --- | --- | --- |" in table
+    assert "| --- | --- | --- | --- | --- | --- | --- | --- |" in table
     # Both titles present.
     assert "First Paper" in table
     assert "Second Paper" in table
@@ -217,6 +220,7 @@ def test_tool_registry_and_schemas_present():
         "summarize_section",
         "compare_papers",
         "generate_lit_table",
+        "score_papers",
         "export",
     }
     names = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
