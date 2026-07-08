@@ -6,8 +6,9 @@ which writes a file and returns the file path.
 
 The public surface used by the rest of the codebase is:
 
-* the six tool functions (``search_chunks``, ``summarize_section``,
-  ``compare_papers``, ``generate_lit_table``, ``score_papers``, ``export``),
+* the seven tool functions (``search_chunks``, ``summarize_section``,
+  ``compare_papers``, ``generate_lit_table``, ``literature_review``,
+  ``score_papers``, ``export``),
 * ``TOOL_SCHEMAS`` -- OpenAI function-calling schemas for all tools,
 * ``TOOL_REGISTRY`` -- maps a tool name to its callable.
 """
@@ -112,13 +113,43 @@ def summarize_section(paper_id: str, section: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Shared: render paper cards as text context for LLM synthesis
+# --------------------------------------------------------------------------- #
+def _cards_context(cards: list[PaperCard]) -> str:
+    """Render a list of cards into a compact, grounded context block for the LLM."""
+    blocks: list[str] = []
+    for c in cards:
+        parts = [
+            f"[{c.paper_id}] {c.title}"
+            + (f" ({c.year})" if c.year is not None else "")
+            + (f" — type: {c.paper_type}" if c.paper_type else ""),
+            f"  problem: {c.problem}",
+            f"  method: {c.method}",
+            f"  dataset: {c.dataset}",
+            f"  contribution: {c.contribution}",
+            f"  limitation: {c.limitation}",
+        ]
+        if c.key_terms:
+            parts.append("  key terms: " + "; ".join(c.key_terms))
+        blocks.append("\n".join(parts))
+    return "\n\n".join(blocks)
+
+
+# --------------------------------------------------------------------------- #
 # Tool 3: multi-paper comparison
 # --------------------------------------------------------------------------- #
-def compare_papers(paper_ids: list[str], dimensions: list[str] | None = None) -> str:
+def compare_papers(
+    paper_ids: list[str],
+    dimensions: list[str] | None = None,
+    synthesize: bool = False,
+) -> str:
     """Compare several papers across the given dimensions.
 
     Produces a markdown table with one row per dimension and one column per
-    paper. Missing papers are reported inline rather than raising.
+    paper. Missing papers are reported inline rather than raising. When
+    ``synthesize`` is true, an LLM cross-analysis (similarities, key
+    differences, methodological contrast, and what each paper is best for) is
+    appended below the table, grounded only in the cards.
     """
     if not paper_ids:
         return "No paper ids provided to compare."
@@ -152,7 +183,42 @@ def compare_papers(paper_ids: list[str], dimensions: list[str] | None = None) ->
     table = "\n".join(lines)
     if missing:
         table += "\n\n_Note: no card found for: " + ", ".join(missing) + "._"
+
+    present = [c for c in cards if c is not None]
+    if synthesize and len(present) >= 2:
+        table += "\n\n### Cross-analysis\n\n" + _synthesize_comparison(present, dims)
     return table
+
+
+def _synthesize_comparison(cards: list[PaperCard], dims: list[str]) -> str:
+    """LLM narrative comparing the given cards, grounded in their fields."""
+    system = (
+        "You are a research assistant comparing academic papers. Base every "
+        "statement ONLY on the provided paper cards; do not invent facts, "
+        "results, or citations. Cite papers inline by their [paper_id]. If the "
+        "cards do not support a comparison on some point, say so plainly."
+    )
+    user = (
+        "Compare the following papers"
+        + (f" focusing on: {', '.join(dims)}.\n\n" if dims else ".\n\n")
+        + _cards_context(cards)
+        + "\n\nWrite a concise cross-analysis with these subsections:\n"
+        "- **Similarities** — what they share (problem, method family, data).\n"
+        "- **Key differences** — where they diverge and why it matters.\n"
+        "- **Methodological contrast** — how their approaches differ.\n"
+        "- **What each is best for** — one line per paper, cite [paper_id].\n"
+        "Keep it tight and evidence-bound."
+    )
+    try:
+        result = get_llm().chat(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+        )
+    except Exception as exc:  # noqa: BLE001 - degrade to the table, never crash
+        return f"_(Cross-analysis unavailable: {exc})_"
+    return (result.content or "").strip() or "_(No cross-analysis produced.)_"
 
 
 # --------------------------------------------------------------------------- #
@@ -196,7 +262,65 @@ def generate_lit_table(paper_ids: list[str] | None = None) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# Tool 5: six-dimension relevance scoring
+# Tool 5: multi-paper literature review (synthesis)
+# --------------------------------------------------------------------------- #
+def literature_review(paper_ids: list[str] | None = None, focus: str | None = None) -> str:
+    """Synthesize a mini literature review across several papers.
+
+    Reads the stored cards (optionally narrowed to ``paper_ids``, else the whole
+    library) and asks the LLM to synthesize — grounded only in those cards —
+    the themes, methodological approaches, points of consensus and
+    disagreement, and open gaps across the set. An optional ``focus`` steers the
+    review toward a specific angle. Papers are cited inline by ``[paper_id]``.
+    """
+    if paper_ids:
+        cards = [c for c in (db.get_card(pid) for pid in paper_ids) if c is not None]
+    else:
+        cards = db.list_cards()
+
+    if not cards:
+        return "No papers in the library yet."
+    if len(cards) == 1:
+        # A "review" of one paper is just its summary — say so and proceed.
+        note = "_Only one paper provided; a cross-paper synthesis needs at least two._\n\n"
+    else:
+        note = ""
+
+    system = (
+        "You are a research assistant writing a concise literature synthesis "
+        "across multiple papers. Base every statement ONLY on the provided "
+        "paper cards — never invent findings, numbers, or citations. Cite "
+        "papers inline by their [paper_id]. Where the cards conflict or leave a "
+        "question open, say so; do not smooth it over."
+    )
+    user = (
+        (f"Review focus: {focus}\n\n" if focus and focus.strip() else "")
+        + "Papers:\n\n"
+        + _cards_context(cards)
+        + "\n\nWrite a structured synthesis with these sections:\n"
+        "1. **Overview** — how many papers and what they collectively address.\n"
+        "2. **Themes** — how the papers cluster; cite [paper_id]s per theme.\n"
+        "3. **Methods** — the main methodological approaches and who uses them.\n"
+        "4. **Consensus** — points the papers agree on.\n"
+        "5. **Disagreements / contrasts** — where they diverge.\n"
+        "6. **Open gaps** — limitations and unanswered questions across the set.\n"
+        "Be concise and strictly grounded in the cards."
+    )
+    try:
+        result = get_llm().chat(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+        )
+    except Exception as exc:  # noqa: BLE001 - report, don't crash the agent loop
+        return f"Literature review failed: {exc}"
+    body = (result.content or "").strip()
+    return (note + body) if body else "No literature review produced."
+
+
+# --------------------------------------------------------------------------- #
+# Tool 6: six-dimension relevance scoring
 # --------------------------------------------------------------------------- #
 # Weights follow the nature-literature-pipeline rubric: topic match dominates,
 # and it is also a gate — a paper that misses the topic is rejected outright no
@@ -350,7 +474,7 @@ def _as_int(value: object) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# Tool 6: export
+# Tool 7: export
 # --------------------------------------------------------------------------- #
 def _next_export_index(export_dir: Path, prefix: str, ext: str) -> int:
     """Pick a stable index by counting existing matching export files.
@@ -515,8 +639,10 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "compare_papers",
             "description": (
-                "Compare multiple papers across dimensions and return a markdown "
-                "comparison table (dimensions as rows, papers as columns)."
+                "Compare 2+ papers across dimensions and return a markdown "
+                "comparison table (dimensions as rows, papers as columns). Set "
+                "synthesize=true to also append an AI cross-analysis of their "
+                "similarities, differences, and what each is best for."
             ),
             "parameters": {
                 "type": "object",
@@ -532,6 +658,13 @@ TOOL_SCHEMAS: list[dict] = [
                         "description": (
                             "Optional dimensions to compare. Defaults to "
                             "problem, method, dataset, contribution, limitation."
+                        ),
+                    },
+                    "synthesize": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, append an LLM cross-analysis below the "
+                            "table. Default false."
                         ),
                     },
                 },
@@ -556,6 +689,41 @@ TOOL_SCHEMAS: list[dict] = [
                         "description": (
                             "Optional: restrict the table to these paper ids. "
                             "Omit for all papers."
+                        ),
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "literature_review",
+            "description": (
+                "Synthesize a mini literature review across several papers: "
+                "themes, methodological approaches, points of consensus and "
+                "disagreement, and open gaps — grounded only in the stored "
+                "cards, citing papers by [paper_id]. Omit paper_ids for the "
+                "whole library. Use when the user wants an overview/synthesis "
+                "of multiple papers rather than a field-by-field table."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paper_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Optional: restrict the review to these paper ids. "
+                            "Omit for the whole library."
+                        ),
+                    },
+                    "focus": {
+                        "type": "string",
+                        "description": (
+                            "Optional angle to steer the review, e.g. "
+                            "'how they handle limited data'."
                         ),
                     },
                 },
@@ -647,6 +815,7 @@ TOOL_REGISTRY: dict[str, Callable] = {
     "summarize_section": summarize_section,
     "compare_papers": compare_papers,
     "generate_lit_table": generate_lit_table,
+    "literature_review": literature_review,
     "score_papers": score_papers,
     "export": export,
 }

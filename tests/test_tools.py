@@ -220,6 +220,7 @@ def test_tool_registry_and_schemas_present():
         "summarize_section",
         "compare_papers",
         "generate_lit_table",
+        "literature_review",
         "score_papers",
         "export",
     }

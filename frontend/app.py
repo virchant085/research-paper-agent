@@ -267,7 +267,7 @@ def render_chat_tab(api_base: str) -> None:
 # Library tab
 # --------------------------------------------------------------------------- #
 def render_library_tab(api_base: str) -> None:
-    """Literature table, pairwise comparison, and export."""
+    """Literature table, cross-comparison, multi-paper review, and export."""
     st.header("Library")
 
     papers = fetch_papers(api_base)
@@ -276,14 +276,27 @@ def render_library_tab(api_base: str) -> None:
         return
 
     label_to_id = {_paper_label(c): c.get("paper_id", "") for c in papers}
+    all_labels = list(label_to_id.keys())
 
     # --- Literature table ------------------------------------------------- #
     st.subheader("Literature table")
+    st.caption("Pick papers for the table (leave empty for the whole library).")
+    table_labels = st.multiselect(
+        "Papers in table", options=all_labels, key="table_select"
+    )
+    table_ids = [label_to_id[lbl] for lbl in table_labels] or None
     try:
-        table = api_post(api_base, "/table", json={"paper_ids": None})
+        table = api_post(api_base, "/table", json={"paper_ids": table_ids})
         md = table.get("markdown", "")
         if md.strip():
             st.markdown(md)
+            st.download_button(
+                "Download table (.md)",
+                data=md,
+                file_name="literature_table.md",
+                mime="text/markdown",
+                key="dl_table",
+            )
         else:
             st.info("Literature table is empty.")
     except requests.exceptions.ConnectionError:
@@ -293,19 +306,26 @@ def render_library_tab(api_base: str) -> None:
 
     st.markdown("---")
 
-    # --- Compare ---------------------------------------------------------- #
-    st.subheader("Compare papers")
+    # --- Cross-comparison ------------------------------------------------- #
+    st.subheader("Cross-compare papers")
     compare_labels = st.multiselect(
         "Select papers to compare",
-        options=list(label_to_id.keys()),
+        options=all_labels,
         key="compare_select",
+    )
+    synthesize = st.checkbox(
+        "Add AI cross-analysis (similarities / differences / what each is best for)",
+        value=True,
+        key="compare_synthesize",
     )
     if st.button("Compare", disabled=len(compare_labels) < 2):
         paper_ids = [label_to_id[lbl] for lbl in compare_labels]
         with st.spinner("Comparing..."):
             try:
                 result = api_post(
-                    api_base, "/compare", json={"paper_ids": paper_ids}
+                    api_base,
+                    "/compare",
+                    json={"paper_ids": paper_ids, "synthesize": synthesize},
                 )
                 st.markdown(result.get("markdown", "") or "(no comparison returned)")
             except requests.exceptions.ConnectionError:
@@ -314,6 +334,44 @@ def render_library_tab(api_base: str) -> None:
                 st.error(f"Compare failed: {exc}")
     elif len(compare_labels) == 1:
         st.caption("Select at least two papers to compare.")
+
+    st.markdown("---")
+
+    # --- Literature review (synthesis) ------------------------------------ #
+    st.subheader("Literature review (synthesis)")
+    st.caption(
+        "Synthesize themes, methods, consensus, disagreements, and gaps across "
+        "papers — grounded in the extracted cards."
+    )
+    review_labels = st.multiselect(
+        "Papers to review (leave empty for the whole library)",
+        options=all_labels,
+        key="review_select",
+    )
+    review_focus = st.text_input(
+        "Focus (optional)",
+        placeholder="e.g. how they handle limited data",
+        key="review_focus",
+    )
+    if st.button("Synthesize review"):
+        review_ids = [label_to_id[lbl] for lbl in review_labels] or None
+        payload = {"paper_ids": review_ids, "focus": review_focus.strip() or None}
+        with st.spinner("Synthesizing literature review..."):
+            try:
+                result = api_post(api_base, "/review", json=payload)
+                md = result.get("markdown", "") or "(no review returned)"
+                st.markdown(md)
+                st.download_button(
+                    "Download review (.md)",
+                    data=md,
+                    file_name="literature_review.md",
+                    mime="text/markdown",
+                    key="dl_review",
+                )
+            except requests.exceptions.ConnectionError:
+                st.error(CONNECTION_HINT)
+            except requests.exceptions.RequestException as exc:
+                st.error(f"Review failed: {exc}")
 
     st.markdown("---")
 

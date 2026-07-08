@@ -12,8 +12,9 @@ Endpoints
 - ``GET  /papers/{id}``     : fetch a single paper card (404 if missing).
 - ``DELETE /papers/{id}``   : remove a paper from the DB and the vector store.
 - ``POST /query``           : run the agent over a question.
-- ``POST /compare``         : produce a markdown comparison of papers.
+- ``POST /compare``         : produce a markdown comparison of papers (optional AI cross-analysis).
 - ``POST /table``           : produce a markdown literature table.
+- ``POST /review``          : synthesize a multi-paper literature review.
 - ``POST /export``          : export cards/content to a file on disk.
 - ``GET  /health``          : liveness + configured provider.
 """
@@ -34,6 +35,7 @@ from backend.models.schemas import (
     PaperCard,
     QueryRequest,
     QueryResponse,
+    ReviewRequest,
     TableRequest,
 )
 from backend.services import db
@@ -109,13 +111,23 @@ async def query(req: QueryRequest) -> QueryResponse:
 @router.post("/compare")
 async def compare(req: CompareRequest) -> dict:
     """Return a markdown comparison across the requested papers."""
-    return {"markdown": tools.compare_papers(req.paper_ids, req.dimensions)}
+    return {
+        "markdown": tools.compare_papers(
+            req.paper_ids, req.dimensions, req.synthesize
+        )
+    }
 
 
 @router.post("/table")
 async def table(req: TableRequest) -> dict:
     """Return a markdown literature-review table."""
     return {"markdown": tools.generate_lit_table(req.paper_ids)}
+
+
+@router.post("/review")
+async def review(req: ReviewRequest) -> dict:
+    """Return a synthesized multi-paper literature review (markdown)."""
+    return {"markdown": tools.literature_review(req.paper_ids, req.focus)}
 
 
 @router.post("/export", response_model=ExportResponse)

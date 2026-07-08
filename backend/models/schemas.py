@@ -101,10 +101,16 @@ class QueryResponse(BaseModel):
 class CompareRequest(BaseModel):
     paper_ids: List[str]
     dimensions: Optional[List[str]] = None  # defaults to the five card fields
+    synthesize: bool = False  # also append an LLM cross-analysis
 
 
 class TableRequest(BaseModel):
     paper_ids: Optional[List[str]] = None  # None => all papers
+
+
+class ReviewRequest(BaseModel):
+    paper_ids: Optional[List[str]] = None  # None => whole library
+    focus: Optional[str] = None  # optional angle to steer the synthesis
 
 
 class ExportRequest(BaseModel):

@@ -20,7 +20,7 @@ Three things set it apart:
   `LLM_MODEL` string; no per-provider code.
 - **Grounded by design** — both extraction and answers must cite the source or say it isn't
   stated, never guess. Evidence quotes are verified against the original text.
-- **Production-shaped** — typed FastAPI backend, 98 offline tests, and CI on Python 3.11 / 3.12;
+- **Production-shaped** — typed FastAPI backend, 108 offline tests, and CI on Python 3.11 / 3.12;
   one-command Docker for the API + UI.
 
 ---
@@ -30,7 +30,7 @@ Three things set it apart:
 ```
 Streamlit UI  ──HTTP──▶  FastAPI  ──▶  Agent (function-calling loop)
                                           ├─ Ingestion pipeline (parse → chunk → extract → index)
-                                          └─ Tools: search / summarize / compare / score / lit-table / export
+                                          └─ Tools: search / summarize / compare / review / score / lit-table / export
                                                        │
                               Chroma (vectors) ◀───────┼───────▶ SQLite (PaperCards)
                                                        │
@@ -82,8 +82,9 @@ and provide that provider's key under its standard variable name:
 |------|--------------|
 | `search_chunks` | Vector search over paper chunks, filterable by paper / section |
 | `summarize_section` | Summarize one section of a paper, grounded in its retrieved text |
-| `compare_papers` | Markdown comparison table across the card dimensions (incl. `paper_type`) |
+| `compare_papers` | Side-by-side table across card dimensions, plus an optional AI cross-analysis (similarities / differences / what each is best for) |
 | `generate_lit_table` | Literature-review table over selected papers |
+| `literature_review` | Synthesize themes, methods, consensus, disagreements & gaps across many papers |
 | `score_papers` | Rank papers against a research focus on six weighted dimensions |
 | `export` | Write Markdown or CSV to disk, return the path |
 
@@ -97,8 +98,9 @@ and provide that provider's key under its standard variable name:
 | `GET` | `/papers/{id}` | One paper card (404 if absent) |
 | `DELETE` | `/papers/{id}` | Remove a paper (cards + vectors) |
 | `POST` | `/query` | Ask a question → agent answer + tool trace |
-| `POST` | `/compare` | Compare papers → markdown |
+| `POST` | `/compare` | Compare papers → markdown (optional AI cross-analysis) |
 | `POST` | `/table` | Literature table → markdown |
+| `POST` | `/review` | Multi-paper literature review (synthesis) → markdown |
 | `POST` | `/export` | Export markdown/CSV → file path |
 | `GET` | `/health` | Liveness + active model |
 
@@ -130,7 +132,7 @@ docker compose up --build
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                        # 98 tests, fully offline (LLM + network are mocked)
+pytest                        # 108 tests, fully offline (LLM + network are mocked)
 ```
 
 The suite runs with no API keys: the LLM is replaced by a deterministic fake, while Chroma
@@ -146,7 +148,7 @@ backend/
   api/routes.py      REST endpoints
   core/
     agent.py         bounded function-calling loop
-    tools.py         the 6 tools + OpenAI-format schemas + registry
+    tools.py         the 7 tools + OpenAI-format schemas + registry
     ingestion.py     parse → chunk → extract card → index
   services/
     llm.py           universal LLM client (LiteLLM: chat / structured / embed)
@@ -155,7 +157,7 @@ backend/
     db.py            SQLite PaperCard store
   models/schemas.py  Pydantic contracts (PaperCard, Chunk, request/response)
 frontend/app.py      Streamlit UI (Papers / Chat / Library tabs)
-tests/               offline pytest suite (98 tests)
+tests/               offline pytest suite (108 tests)
 Dockerfile           docker-compose.yml   .github/workflows/ci.yml
 ```
 
